@@ -10,6 +10,8 @@
 #include "config.h"
 #endif
 
+#define ROM_BASED_WRITE 1
+
 #include "imp.h"
 #include <helper/binarybuffer.h>
 #include <target/algorithm.h>
@@ -204,6 +206,50 @@ static int phyplus6252_erase_sector(struct flash_bank *bank, uint32_t sector)
     return res;
 }
 
+#if ROM_BASED_WRITE
+
+#define ROM_SPIF_WRITE_ADDR 0x100010B0  // <- Adjust if your disassembly shows a different location
+#define ROM_STUB_ADDR       0x1FFF7000
+#define ROM_BUFFER_ADDR     0x1FFF7400
+
+static const uint8_t rom_spif_write_stub[] = {
+    0x00, 0xB5,             // push {lr}
+    0x02, 0x4B,             // ldr r3, [pc, #8]
+    0x18, 0x47,             // bx  r3
+    0x00, 0xBD,             // pop {pc}
+    (ROM_SPIF_WRITE_ADDR & 0xFF), 
+    ((ROM_SPIF_WRITE_ADDR >> 8) & 0xFF),
+    ((ROM_SPIF_WRITE_ADDR >> 16) & 0xFF),
+    ((ROM_SPIF_WRITE_ADDR >> 24) & 0xFF),
+};
+
+static int phyplus6252_rom_write(struct flash_bank *bank, uint32_t offset, const uint8_t *buffer, uint32_t length)
+{
+    struct target *target = bank->target;
+    int res;
+
+    // Upload the stub
+    res = target_write_buffer(target, ROM_STUB_ADDR, sizeof(rom_spif_write_stub), rom_spif_write_stub);
+    if (res != ERROR_OK)
+        return res;
+
+    // Upload the write buffer
+    res = target_write_buffer(target, ROM_BUFFER_ADDR, length, buffer);
+    if (res != ERROR_OK)
+        return res;
+
+    // Call the stub with (flash_addr, ram_buf, length)
+    uint32_t args[3] = { PHYPLUS6252_FLASH_BASE + offset, ROM_BUFFER_ADDR, length };
+    res = target_run_algorithm(target, 0, 3, args, ROM_STUB_ADDR, 0, 5000, NULL);
+
+    if (res != ERROR_OK)
+        LOG_ERROR("ROM write failed at 0x%08" PRIx32, offset);
+
+    return res;
+}
+
+#else
+
 // Program page (256B)
 static int phyplus6252_program_page(struct flash_bank *bank, uint32_t addr, const uint8_t *buf, uint32_t len)
 {
@@ -233,6 +279,8 @@ static int phyplus6252_program_page(struct flash_bank *bank, uint32_t addr, cons
     phyplus6252_flash_lock(target);
     return ERROR_OK;
 }
+
+#endif
 
 // Read (for verification)
 static int phyplus6252_read(struct flash_bank *bank, uint8_t *buffer, uint32_t offset, uint32_t count)
@@ -292,7 +340,11 @@ static int phyplus6252_erase(struct flash_bank *bank, unsigned int first, unsign
 }
 
 static int phyplus6252_write(struct flash_bank *bank, const uint8_t *buffer, uint32_t offset, uint32_t count) {
+#if ROM_BASED_WRITE
+    return phyplus6252_rom_write(bank, offset, buffer, count);
+#else
     return phyplus6252_program_page(bank, offset, buffer, count);
+#endif
 }
 
 static int phyplus6252_protect(struct flash_bank *bank, int set, unsigned int first, unsigned int last) {
