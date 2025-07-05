@@ -17,6 +17,7 @@
 #include <target/algorithm.h>
 #include <target/armv7m.h>
 #include <target/target.h>
+#include <target/target_type.h> // for struct reg_param
 
 #define PHYPLUS6252_FLASH_BASE      0x11000000
 #define PHYPLUS6252_SPIF_BASE       0x4000C800
@@ -206,8 +207,6 @@ static int phyplus6252_erase_sector(struct flash_bank *bank, uint32_t sector)
     return res;
 }
 
-#if ROM_BASED_WRITE
-
 #define ROM_SPIF_WRITE_ADDR 0x100010B0  // <- Adjust if your disassembly shows a different location
 #define ROM_STUB_ADDR       0x1FFF7000
 #define ROM_BUFFER_ADDR     0x1FFF7400
@@ -223,35 +222,12 @@ static const uint8_t rom_spif_write_stub[] = {
     ((ROM_SPIF_WRITE_ADDR >> 24) & 0xFF),
 };
 
-static int phyplus6252_rom_write(struct flash_bank *bank, uint32_t offset, const uint8_t *buffer, uint32_t length)
-{
-    struct target *target = bank->target;
-    int res;
-
-    // Upload the stub
-    res = target_write_buffer(target, ROM_STUB_ADDR, sizeof(rom_spif_write_stub), rom_spif_write_stub);
-    if (res != ERROR_OK)
-        return res;
-
-    // Upload the write buffer
-    res = target_write_buffer(target, ROM_BUFFER_ADDR, length, buffer);
-    if (res != ERROR_OK)
-        return res;
-
-    // Call the stub with (flash_addr, ram_buf, length)
-    uint32_t args[3] = { PHYPLUS6252_FLASH_BASE + offset, ROM_BUFFER_ADDR, length };
-    res = target_run_algorithm(target, 0, 3, args, ROM_STUB_ADDR, 0, 5000, NULL);
-
-    if (res != ERROR_OK)
-        LOG_ERROR("ROM write failed at 0x%08" PRIx32, offset);
-
-    return res;
-}
-
-#else
-
-// Program page (256B)
-static int phyplus6252_program_page(struct flash_bank *bank, uint32_t addr, const uint8_t *buf, uint32_t len)
+static int phyplus6252_write_common(
+    struct flash_bank *bank,
+    uint32_t offset,
+    const uint8_t *buffer,
+    uint32_t length,
+    int use_rom_write)
 {
     struct target *target = bank->target;
     int res;
@@ -262,25 +238,68 @@ static int phyplus6252_program_page(struct flash_bank *bank, uint32_t addr, cons
 
     res = phyplus6252_flash_unlock(target);
     if (res != ERROR_OK) return res;
-    uint32_t offset = 0;
-    while (offset < len) {
-        uint32_t chunk = (len - offset > 256) ? 256 : (len - offset);
-        phyplus6252_cmd(target, FCMD_WREN, 0, 0, 0, 0);
-        // Write data to FCMD_WRDATA0 (assumes 32-bit writes)
-        for (uint32_t i = 0; i < chunk; i += 4) {
-            uint32_t w = buf[offset + i] | (buf[offset + i + 1] << 8) |
-                         (buf[offset + i + 2] << 16) | (buf[offset + i + 3] << 24);
-            phyplus6252_write_reg(target, SPIF_FCMD_WRDATA0, w);
+
+    if (use_rom_write) {
+        // ROM-based write path
+        phyplus6252_wait_idle(target);
+
+        // Upload the stub
+        res = target_write_buffer(target, ROM_STUB_ADDR, sizeof(rom_spif_write_stub), rom_spif_write_stub);
+        if (res != ERROR_OK)
+            return res;
+
+        // Upload the write buffer
+        res = target_write_buffer(target, ROM_BUFFER_ADDR, length, buffer);
+        if (res != ERROR_OK)
+            return res;
+
+        // Call the stub with (flash_addr, ram_buf, length)
+        struct reg_param reg_params[3];
+        init_reg_param(&reg_params[0], "r0", 32, PARAM_OUT);
+        init_reg_param(&reg_params[1], "r1", 32, PARAM_OUT);
+        init_reg_param(&reg_params[2], "r2", 32, PARAM_OUT);
+
+        buf_set_u32(reg_params[0].value, 0, 32, PHYPLUS6252_FLASH_BASE + offset);
+        buf_set_u32(reg_params[1].value, 0, 32, ROM_BUFFER_ADDR);
+        buf_set_u32(reg_params[2].value, 0, 32, length);
+
+        res = target_run_algorithm(target,
+            0, NULL, // no mem_params
+            3, reg_params,
+            ROM_STUB_ADDR, 0, 5000, NULL);
+
+        destroy_reg_param(&reg_params[0]);
+        destroy_reg_param(&reg_params[1]);
+        destroy_reg_param(&reg_params[2]);
+
+        phyplus6252_wait_idle(target);
+    } else {
+        // Direct controller write path (page program)
+        uint32_t addr = PHYPLUS6252_FLASH_BASE + offset;
+        uint32_t written = 0;
+        while (written < length) {
+            uint32_t chunk = (length - written > 256) ? 256 : (length - written);
+            phyplus6252_cmd(target, FCMD_WREN, 0, 0, 0, 0);
+            // Write data to FCMD_WRDATA0 (assumes 32-bit writes)
+            for (uint32_t i = 0; i < chunk; i += 4) {
+                uint32_t w = buffer[written + i] | (buffer[written + i + 1] << 8) |
+                             (buffer[written + i + 2] << 16) | (buffer[written + i + 3] << 24);
+                phyplus6252_write_reg(target, SPIF_FCMD_WRDATA0, w);
+            }
+            phyplus6252_cmd(target, FCMD_PP, addr + written, 3, chunk, 0);
+            phyplus6252_wait_ready(target);
+            written += chunk;
         }
-        phyplus6252_cmd(target, FCMD_PP, addr + offset, 3, chunk, 0);
-        phyplus6252_wait_ready(target);
-        offset += chunk;
     }
+
     phyplus6252_flash_lock(target);
-    return ERROR_OK;
+
+    if (res != ERROR_OK)
+        LOG_ERROR("Flash write failed at 0x%08" PRIx32, offset);
+
+    return res;
 }
 
-#endif
 
 // Read (for verification)
 static int phyplus6252_read(struct flash_bank *bank, uint8_t *buffer, uint32_t offset, uint32_t count)
@@ -341,9 +360,9 @@ static int phyplus6252_erase(struct flash_bank *bank, unsigned int first, unsign
 
 static int phyplus6252_write(struct flash_bank *bank, const uint8_t *buffer, uint32_t offset, uint32_t count) {
 #if ROM_BASED_WRITE
-    return phyplus6252_rom_write(bank, offset, buffer, count);
+    return phyplus6252_write_common(bank, offset, buffer, count, 1);
 #else
-    return phyplus6252_program_page(bank, offset, buffer, count);
+    return phyplus6252_write_common(bank, offset, buffer, count, 0);
 #endif
 }
 
