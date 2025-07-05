@@ -154,7 +154,7 @@ static int phyplus6252_wait_ready(struct target *target)
     return ERROR_FAIL;
 }
 
-// Add unlock/lock helpers for write protection
+// Add unlock/lock helpers for write enable
 static int phyplus6252_flash_unlock(struct target *target)
 {
     // Write Enable
@@ -177,12 +177,24 @@ static int phyplus6252_flash_lock(struct target *target)
     return phyplus6252_wait_ready(target);
 }
 
+// Helper to disable write protection
+static int phyplus6252_disable_write_protection(struct target *target)
+{
+    // Write 0 to wr_protection register (offset 0x58)
+    return phyplus6252_write_reg(target, SPIF_WR_PROTECTION, 0);
+}
+
 // Erase sector (4kB)
 static int phyplus6252_erase_sector(struct flash_bank *bank, uint32_t sector)
 {
     struct target *target = bank->target;
     uint32_t addr = bank->sectors[sector].offset + bank->base;
     int res;
+
+    // Disable write protection before erase
+    res = phyplus6252_disable_write_protection(target);
+    if (res != ERROR_OK) return res;
+
     res = phyplus6252_flash_unlock(target);
     if (res != ERROR_OK) return res;
     phyplus6252_cmd(target, FCMD_WREN, 0, 0, 0, 0);
@@ -196,7 +208,13 @@ static int phyplus6252_erase_sector(struct flash_bank *bank, uint32_t sector)
 static int phyplus6252_program_page(struct flash_bank *bank, uint32_t addr, const uint8_t *buf, uint32_t len)
 {
     struct target *target = bank->target;
-    int res = phyplus6252_flash_unlock(target);
+    int res;
+
+    // Disable write protection before programming
+    res = phyplus6252_disable_write_protection(target);
+    if (res != ERROR_OK) return res;
+
+    res = phyplus6252_flash_unlock(target);
     if (res != ERROR_OK) return res;
     uint32_t offset = 0;
     while (offset < len) {
