@@ -46,7 +46,8 @@
 
 /* Boot ROM flash unlock mechanism addresses */
 #define SRAM_OVERRIDE_ADDR          0x1FFF0801  /* SRAM soft override flag */
-#define IOMUX_GATE_ADDR             0x4000B014  /* IOMUX[0x14] - flash controller gate */
+#define IOMUX_GATE_ADDR             0x40003814  /* IOMUX[0x14] - flash controller gate (corrected) */
+#define IOMUX_GATE_ADDR_ALT         0x4000B014  /* Alternative address (old assumption) */
 #define PCR_CACHE_BYPASS_ADDR       0x4000F000  /* _PCR_BASE_CACHE_BYPASS register */
 #define PCR_SOFT_RESET_ADDR         0x4000F030  /* PCR software reset register */
 
@@ -103,19 +104,32 @@ static int wait_ready(struct target *target) {
 
 /* Check if flash is locked by testing IOMUX gate */
 static int is_flash_locked(struct target *target, bool *locked) {
-    uint32_t iomux_gate;
-    int result = target_read_u32(target, IOMUX_GATE_ADDR, &iomux_gate);
+    uint32_t iomux_gate, iomux_gate_alt;
+    int result;
+    
+    /* Read both possible IOMUX gate addresses */
+    result = target_read_u32(target, IOMUX_GATE_ADDR, &iomux_gate);
     if (result != ERROR_OK) {
-        LOG_ERROR("Failed to read IOMUX gate register");
+        LOG_ERROR("Failed to read IOMUX gate at 0x%08" PRIx32, IOMUX_GATE_ADDR);
         return result;
     }
     
-    *locked = (iomux_gate == 0);  /* IOMUX[0x14] = 0 means flash access is gated/locked */
+    result = target_read_u32(target, IOMUX_GATE_ADDR_ALT, &iomux_gate_alt);
+    if (result != ERROR_OK) {
+        LOG_ERROR("Failed to read IOMUX gate at 0x%08" PRIx32, IOMUX_GATE_ADDR_ALT);
+        return result;
+    }
+    
+    LOG_INFO("IOMUX gate status: 0x%08" PRIx32 " @ 0x%08" PRIx32 ", 0x%08" PRIx32 " @ 0x%08" PRIx32, 
+             iomux_gate, IOMUX_GATE_ADDR, iomux_gate_alt, IOMUX_GATE_ADDR_ALT);
+    
+    /* Use the alternative address for now until we confirm the correct one */
+    *locked = (iomux_gate_alt == 0);  /* IOMUX gate = 0 means flash access is gated/locked */
     
     if (*locked) {
-        LOG_WARNING("Flash is locked (IOMUX gate = 0x%08" PRIx32 ")", iomux_gate);
+        LOG_WARNING("Flash is locked (IOMUX gate = 0x%08" PRIx32 ")", iomux_gate_alt);
     } else {
-        LOG_INFO("Flash is unlocked (IOMUX gate = 0x%08" PRIx32 ")", iomux_gate);
+        LOG_INFO("Flash is unlocked (IOMUX gate = 0x%08" PRIx32 ")", iomux_gate_alt);
     }
     
     return ERROR_OK;
@@ -222,8 +236,32 @@ static int phyplus6252_unlock_flash(struct target *target) {
         
     if (locked) {
         LOG_ERROR("Flash unlock failed - flash is still locked after reset sequence");
-        LOG_ERROR("This may indicate hardware issues or incorrect boot ROM behavior");
-        return ERROR_FAIL;
+        
+        /* Try manual IOMUX gate unlock as a last resort */
+        LOG_INFO("Attempting manual IOMUX gate unlock");
+        
+        /* Try both possible addresses */
+        result = target_write_u32(target, IOMUX_GATE_ADDR, 0xFFFFFFFF);
+        if (result == ERROR_OK) {
+            LOG_INFO("Manually set IOMUX gate at 0x%08" PRIx32, IOMUX_GATE_ADDR);
+        }
+        
+        result = target_write_u32(target, IOMUX_GATE_ADDR_ALT, 0xFFFFFFFF);
+        if (result == ERROR_OK) {
+            LOG_INFO("Manually set IOMUX gate at 0x%08" PRIx32, IOMUX_GATE_ADDR_ALT);
+        }
+        
+        /* Check again */
+        result = is_flash_locked(target, &locked);
+        if (result != ERROR_OK || locked) {
+            LOG_ERROR("Manual IOMUX unlock also failed");
+            LOG_ERROR("This may indicate hardware issues or incorrect boot ROM behavior");
+            return ERROR_FAIL;
+        } else {
+            LOG_INFO("Manual IOMUX unlock succeeded");
+        }
+    } else {
+        LOG_INFO("Flash unlock succeeded via boot ROM mechanism");
     }
     
     /* Step 7: Re-enable cache bypass after reset (may have been cleared) */
