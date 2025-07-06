@@ -46,10 +46,12 @@
 
 /* Boot ROM flash unlock mechanism addresses */
 #define SRAM_OVERRIDE_ADDR          0x1FFF0801  /* SRAM soft override flag */
-#define IOMUX_GATE_ADDR             0x40003814  /* IOMUX[0x14] - flash controller gate (corrected) */
-#define IOMUX_GATE_ADDR_ALT         0x4000B014  /* Alternative address (old assumption) */
+#define IOMUX_GATE_ADDR             0x40003814  /* IOMUX[0x14] - flash controller gate (correct per register map) */
+#define IOMUX_GATE_ADDR_ALT         0x4000B014  /* Alternative address (original assumption) */
 #define PCR_CACHE_BYPASS_ADDR       0x4000F000  /* _PCR_BASE_CACHE_BYPASS register */
+#define PCR_SW_CLK_ADDR             0x4000F008  /* PCR SW_CLK register for clock gating */
 #define PCR_SOFT_RESET_ADDR         0x4000F030  /* PCR software reset register */
+#define IOMUX_CLK_BIT               (1 << 7)    /* _CLK_IOMUX bit in SW_CLK register */
 
 static int write_reg(struct target *target, uint32_t reg, uint32_t value) {
     return target_write_u32(target, PHYPLUS6252_SPIF_BASE + reg, value);
@@ -192,6 +194,25 @@ static int phyplus6252_unlock_flash(struct target *target) {
     
     LOG_INFO("SRAM override flag set successfully");
     
+    /* Step 3.5: Preemptive IOMUX ungating attempt */
+    LOG_INFO("Attempting preemptive IOMUX ungating to break potential deadlock");
+    
+    /* Enable IOMUX clock first */
+    uint32_t sw_clk;
+    result = target_read_u32(target, PCR_SW_CLK_ADDR, &sw_clk);
+    if (result == ERROR_OK) {
+        if (!(sw_clk & IOMUX_CLK_BIT)) {
+            result = target_write_u32(target, PCR_SW_CLK_ADDR, sw_clk | IOMUX_CLK_BIT);
+            if (result == ERROR_OK) {
+                LOG_INFO("Enabled IOMUX clock gate");
+            }
+        }
+    }
+    
+    /* Try ungating both IOMUX addresses */
+    target_write_u32(target, IOMUX_GATE_ADDR, 0x00000001);      /* Try minimal ungated value */
+    target_write_u32(target, IOMUX_GATE_ADDR_ALT, 0x00000001);  /* Try both addresses */
+    
     /* Step 4: Enable cache bypass for direct hardware access */
     LOG_INFO("Enabling cache bypass for direct hardware access");
     result = target_write_u32(target, PCR_CACHE_BYPASS_ADDR, 0x01);
@@ -237,28 +258,74 @@ static int phyplus6252_unlock_flash(struct target *target) {
     if (locked) {
         LOG_ERROR("Flash unlock failed - flash is still locked after reset sequence");
         
-        /* Try manual IOMUX gate unlock as a last resort */
-        LOG_INFO("Attempting manual IOMUX gate unlock");
+        /* Enhanced recovery sequence for IOMUX ungating deadlock */
+        LOG_INFO("Attempting enhanced IOMUX recovery sequence");
         
-        /* Try both possible addresses */
+        /* Step 1: Enable IOMUX clock gate to ensure peripheral is accessible */
+        uint32_t current_sw_clk;
+        result = target_read_u32(target, PCR_SW_CLK_ADDR, &current_sw_clk);
+        if (result == ERROR_OK) {
+            LOG_INFO("Current SW_CLK value: 0x%08" PRIx32, current_sw_clk);
+            if (!(current_sw_clk & IOMUX_CLK_BIT)) {
+                LOG_INFO("Enabling IOMUX clock gate");
+                result = target_write_u32(target, PCR_SW_CLK_ADDR, current_sw_clk | IOMUX_CLK_BIT);
+                if (result != ERROR_OK) {
+                    LOG_WARNING("Failed to enable IOMUX clock gate");
+                }
+            } else {
+                LOG_INFO("IOMUX clock gate already enabled");
+            }
+        } else {
+            LOG_WARNING("Failed to read SW_CLK register");
+        }
+        
+        /* Step 2: Force IOMUX ungating at both possible addresses */
+        LOG_INFO("Manually ungating IOMUX at both possible addresses");
+        
+        /* Try the register map correct address first */
         result = target_write_u32(target, IOMUX_GATE_ADDR, 0xFFFFFFFF);
         if (result == ERROR_OK) {
-            LOG_INFO("Manually set IOMUX gate at 0x%08" PRIx32, IOMUX_GATE_ADDR);
+            LOG_INFO("Successfully wrote IOMUX ungated value to 0x%08" PRIx32, IOMUX_GATE_ADDR);
+        } else {
+            LOG_WARNING("Failed to write to IOMUX address 0x%08" PRIx32, IOMUX_GATE_ADDR);
         }
         
+        /* Also try the alternative address */
         result = target_write_u32(target, IOMUX_GATE_ADDR_ALT, 0xFFFFFFFF);
         if (result == ERROR_OK) {
-            LOG_INFO("Manually set IOMUX gate at 0x%08" PRIx32, IOMUX_GATE_ADDR_ALT);
+            LOG_INFO("Successfully wrote IOMUX ungated value to 0x%08" PRIx32, IOMUX_GATE_ADDR_ALT);
+        } else {
+            LOG_WARNING("Failed to write to IOMUX address 0x%08" PRIx32, IOMUX_GATE_ADDR_ALT);
         }
         
-        /* Check again */
+        /* Step 3: Try different ungated values (maybe 0xFFFFFFFF isn't right) */
+        uint32_t test_values[] = {0x00000001, 0x00000003, 0x0000FFFF, 0x80000000};
+        for (size_t i = 0; i < sizeof(test_values) / sizeof(test_values[0]); i++) {
+            LOG_INFO("Trying IOMUX ungated value 0x%08" PRIx32, test_values[i]);
+            
+            result = target_write_u32(target, IOMUX_GATE_ADDR_ALT, test_values[i]);
+            if (result == ERROR_OK) {
+                /* Quick test to see if this value works */
+                result = is_flash_locked(target, &locked);
+                if (result == ERROR_OK && !locked) {
+                    LOG_INFO("Success! IOMUX ungated with value 0x%08" PRIx32, test_values[i]);
+                    break;
+                }
+            }
+        }
+        
+        /* Step 4: Final verification */
         result = is_flash_locked(target, &locked);
         if (result != ERROR_OK || locked) {
-            LOG_ERROR("Manual IOMUX unlock also failed");
-            LOG_ERROR("This may indicate hardware issues or incorrect boot ROM behavior");
+            LOG_ERROR("Enhanced IOMUX recovery failed - all methods exhausted");
+            LOG_ERROR("This may indicate:");
+            LOG_ERROR("  1. Hardware issues or damaged flash controller");
+            LOG_ERROR("  2. Different IOMUX register mapping than expected");  
+            LOG_ERROR("  3. Additional clock gates or reset sequences required");
+            LOG_ERROR("  4. Flash protection that cannot be bypassed via software");
             return ERROR_FAIL;
         } else {
-            LOG_INFO("Manual IOMUX unlock succeeded");
+            LOG_INFO("Enhanced IOMUX recovery succeeded - flash is now accessible");
         }
     } else {
         LOG_INFO("Flash unlock succeeded via boot ROM mechanism");
