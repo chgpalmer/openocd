@@ -1,0 +1,87 @@
+Open On-Chip Debugger 0.12.0+dev-g9737f0740 (2025-07-04-19:28)
+Licensed under GNU GPL v2
+For bug reports, read
+	http://openocd.org/doc/doxygen/bugs.html
+Warn : DEPRECATED: auto-selecting transport "swd". Use 'transport select swd' to suppress this message.
+Warn : Transport "swd" was already selected
+none separate
+Info : Listening on port 6666 for tcl connections
+Info : Listening on port 4444 for telnet connections
+Info : Using CMSIS-DAPv2 interface with VID:PID=0x0d28:0x0204, serial=00000080002900773900000e4e54514aa5a5a5a597969908
+Info : CMSIS-DAP: SWD supported
+Info : CMSIS-DAP: SWO-UART supported
+Info : CMSIS-DAP: Atomic commands supported
+Info : CMSIS-DAP: Test domain timer supported
+Info : CMSIS-DAP: FW Version = 2.1.0
+Info : CMSIS-DAP: Serial# = 00000080002900773900000e4e54514aa5a5a5a597969908
+Info : CMSIS-DAP: Interface Initialised (SWD)
+Info : SWCLK/TCK = 1 SWDIO/TMS = 1 TDI = 0 TDO = 0 nTRST = 0 nRESET = 1
+Info : CMSIS-DAP: Interface ready
+Info : clock speed 1000 kHz
+Info : SWD DPIDR 0x0bb11477
+Info : [phyplus6252.cpu] Cortex-M0 r0p0 processor detected
+Info : [phyplus6252.cpu] target has 4 breakpoints, 2 watchpoints
+PHYPLUS6252 target detected
+Info : [phyplus6252.cpu] Examination succeed
+Info : [phyplus6252.cpu] starting gdb server on 3333
+Info : Listening on port 3333 for gdb connections
+Info : accepting 'telnet' connection on tcp/4444
+Info : Attempting to unlock PHYPLUS6252 flash using boot ROM mechanism
+Info : IOMUX gate status: 0x00000000 @ 0x40003814, 0x00000000 @ 0x4000b014
+Warn : Flash is locked (IOMUX gate = 0x00000000)
+Info : Halting target for flash unlock sequence
+[phyplus6252.cpu] halted due to debug-request, current mode: Thread 
+xPSR: 0x61000000 pc: 0x0000afe8 msp: 0x1ffff640
+Info : Setting SRAM override flag at 0x1fff0801
+Info : SRAM override flag set successfully
+Info : Attempting preemptive IOMUX ungating to break potential deadlock
+Info : Enabled IOMUX clock gate
+Error: Error connecting DP: cannot read IDR
+Error: Failed to write memory and, additionally, failed to find out where
+Error: Error connecting DP: cannot read IDR
+Error: Failed to write memory and, additionally, failed to find out where
+Info : Enabling cache bypass for direct hardware access
+Error: Error connecting DP: cannot read IDR
+Error: Failed to write memory and, additionally, failed to find out where
+Warn : Failed to set cache bypass (non-critical)
+Info : Triggering software reset to activate boot ROM unlock sequence
+Error: Error connecting DP: cannot read IDR
+Error: Failed to write memory and, additionally, failed to find out where
+Error: Failed to trigger software reset
+Warn : Flash unlock failed during probe, JEDEC detection may fail
+Error: Error connecting DP: cannot read IDR
+Error: Failed to write memory and, additionally, failed to find out where
+Error: Error connecting DP: cannot read IDR
+Error: Failed to read memory and, additionally, failed to find out where
+Error: Error connecting DP: cannot read IDR
+Error: Failed to read memory and, additionally, failed to find out where
+Error: Error connecting DP: cannot read IDR
+Error: Failed to read memory and, additionally, failed to find out where
+Info : PHYPLUS6252 JEDEC ID: 00 00 00
+Warn : Unknown JEDEC ID, defaulting to 1MB flash size
+Info : Flash probe completed: 256 sectors of 4KB each
+Error: [phyplus6252.cpu] Polling failed, trying to reexamine
+Error: Error connecting DP: cannot read IDR
+Error: [phyplus6252.cpu] Examination failed
+Error: [phyplus6252.cpu] Examination failed, GDB will be halted. Polling again in 100ms
+Error: [phyplus6252.cpu] Polling failed, trying to reexamine
+Error: Error connecting DP: cannot read IDR
+Error: [phyplus6252.cpu] Examination failed
+Error: [phyplus6252.cpu] Examination failed, GDB will be halted. Polling again in 300ms
+Error: [phyplus6252.cpu] Polling failed, trying to reexamine
+Error: Error connecting DP: cannot read IDR
+Error: [phyplus6252.cpu] Examination failed
+Error: [phyplus6252.cpu] Examination failed, GDB will be halted. Polling again in 700ms
+Error: [phyplus6252.cpu] Polling failed, trying to reexamine
+Error: Error connecting DP: cannot read IDR
+Error: [phyplus6252.cpu] Examination failed
+Error: [phyplus6252.cpu] Examination failed, GDB will be halted. Polling again in 1500ms
+Error: [phyplus6252.cpu] Polling failed, trying to reexamine
+Error: Error connecting DP: cannot read IDR
+Error: [phyplus6252.cpu] Examination failed
+Error: [phyplus6252.cpu] Examination failed, GDB will be halted. Polling again in 3100ms
+Error: [phyplus6252.cpu] Polling failed, trying to reexamine
+Error: Error connecting DP: cannot read IDR
+Error: [phyplus6252.cpu] Examination failed
+Error: [phyplus6252.cpu] Examination failed, GDB will be halted. Polling again in 6300ms
+shutdown command invoked
